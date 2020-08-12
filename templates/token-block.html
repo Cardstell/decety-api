@@ -1,0 +1,67 @@
+<div class="my-3 p-3 token-block rounded box-shadow d-flex flex-row justify-content-between">
+	<div class="flex-grow-1">
+		<h6 class="mb-0 pb-1 font-weight-bold">{{token}}</h6>
+		<span class="description">{{description}}{{br}}</span><span>{{exp_time}}<br/>Shop ID: {{shop_id}}</span>
+	</div>
+	<div class="d-flex flex-column">
+		<p class="text-right">Images: {{images_count}}<br/>IDs: {{ids_count}}</p>
+		<div class="mt-auto d-flex flex-row justify-content-end">
+			<button class="btn btn-secondary mx-2" data-toggle="modal" data-target="#editTokenModal{{num}}">Edit</button>
+			<button class="btn btn-danger ml-2" data-toggle="modal" data-target="#deleteTokenModal{{num}}">Delete</button>
+		</div>
+	</div>
+</div>
+<div id="deleteTokenModal{{num}}" class="modal" role="dialog">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h4 class="modal-title">Delete token</h4>
+				<button type="button" class="close" data-dismiss="modal">&times;</button>
+			</div>
+			<div class="modal-body">
+				<span>Token <b>{{token}}</b>, IDs and images uploaded using it will be deleted. You can't undo this action.</span>
+			</div>
+			<div class="modal-footer d-flex justify-content-end">
+				<button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+				<button type="button" class="btn btn-danger" onclick="javascript:deleteToken(&quot;{{token}}&quot;)">Delete</button>
+			</div>
+		</div>
+	</div>
+</div>
+<div id="editTokenModal{{num}}" class="modal" role="dialog">
+	<div class="modal-dialog">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h4 class="modal-title">Edit token</h4>
+				<button type="button" class="close" data-dismiss="modal">&times;</button>
+			</div>
+			<div class="modal-body">
+				<span>Token: <b>{{token}}</b><br/></span>
+				<span>Shop ID:</span>
+				<input type="text" id="shop_id{{num}}" placeholder="Shop ID" class="form-control mb-1" value="{{shop_id}}">
+				<span>Description:</span>
+				<input type="text" id="description{{num}}" placeholder="Description" class="form-control mb-1" value="{{description}}">
+				<span>Expiration date/time:</span>
+				<div class="input-group date" id="datetimepicker{{num}}" data-target-input="nearest">
+					<input type="text" class="form-control datetimepicker-input" data-target="#datetimepicker{{num}}" />
+					<span class="input-group-addon" data-target="#datetimepicker{{num}}" data-toggle="datetimepicker">
+						<span class="fa fa-calendar"></span>
+					</span>
+				</div>
+				<script>
+					$(function() {
+						$('#datetimepicker{{num}}').datetimepicker({
+							locale: 'ru'
+						});
+						$('#datetimepicker{{num}}').datetimepicker('date', new Date('{{exp_time_default}}Z'));
+					});
+				</script>
+				<span class="text-invalid mb-0 pb-0" id="text-invalid{{num}}">Invalid token/shop_id/datetime</span>
+			</div>
+			<div class="modal-footer d-flex justify-content-end">
+				<button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+				<button type="button" class="btn btn-primary" onclick="javascript:editToken(&quot;{{token}}&quot;,&quot;{{num}}&quot;)">Edit</button>
+			</div>
+		</div>
+	</div>
+</div>

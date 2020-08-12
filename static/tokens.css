@@ -1,0 +1,37 @@
+html {
+	font-size: 14px;
+}
+
+@media (min-width: 768px) {
+	html {
+		font-size: 16px;
+	}
+}
+
+.box-shadow { 
+	box-shadow: 0 .25rem .75rem rgba(0, 0, 0, .05); 
+}
+
+.token-block {
+	background-color: #f0f0f0;
+}
+
+#new-token-button {
+	background-color: #e5e5e5;
+}
+
+.modal-backdrop {
+	background-color: rgba(0,0,0,.3) !important;
+}
+
+.form-control {
+  position: relative;
+  box-sizing: border-box;
+}
+
+.text-invalid {
+	color: #dc3545;
+	width: 100%;
+	font-size: 90%;
+	display: none;
+}
