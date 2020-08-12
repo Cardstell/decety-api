@@ -194,7 +194,7 @@ func getImagesCount(token string) string {
 }
 
 func getItemsCount(token string) string {
-	stmt, err := db.Prepare("select count(distinct item_id | color | size) from items where token == ?")
+	stmt, err := db.Prepare("select count(*) from (select distinct item_id, color, size from items where token == ?)")
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
 		return "null"

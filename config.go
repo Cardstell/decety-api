@@ -8,4 +8,5 @@ var (
 
 	maxImagesPerID = 50
 	paramNames = []string{"d1", "d2", "d3", "d4", "d5"}
+	paramWeights = []float64{1.0 , 1.0 , 1.0 , 1.0 , 1.0}
 )

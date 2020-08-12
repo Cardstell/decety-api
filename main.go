@@ -231,13 +231,32 @@ func isItemExists(id, color, size, type_ string) bool {
 	return rows.Next()
 } 
 
+func getL2Norm(a, b []float64) float64 {
+	result := 0.0
+	for i := range a {
+		// Z-scaling
+		dt := (a[i] - b[i]) * paramWeights[i]
+		result += dt * dt
+	}
+	return result
+}
+
 func updateHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
-	// type_ := r.FormValue("type")
+	type_ := r.FormValue("type")
 	image_ids := r.FormValue("image_ids")
 	token := r.FormValue("token")
+	params := make([]string, len(paramNames))
+	for i, name := range paramNames {
+		floatValue, err := strconv.ParseFloat(r.FormValue(name), 10)
+		if err != nil || r.FormValue(name) == "" {
+			printError(w, "invalid_request")
+			return
+		}
+		params[i] = fmt.Sprintf("'%f'", floatValue)
+	}
 
 	if !limiter.Allow() {
 		printError(w, "flood_limit")
@@ -272,12 +291,16 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isItemExists(id, color, size, "") {
+	if isItemExists(id, color, size, type_) {
 		printError(w, "invalid_request")
 		return
 	}
 
-	stmt, err := db.Prepare("insert into items (token, shop_id, item_id, color, size, type, image_list) values (?, ?, ?, ?, ?, ?, ?)")
+	stmt, err := db.Prepare(fmt.Sprintf(`insert into items (token, shop_id, item_id, color, size, type, image_list, %s) 
+		values (?, ?, ?, ?, ?, ?, ?, %s)`, 
+		strings.Join(paramNames[:], ", "), 
+		strings.Join(params, ", ")))
+
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -285,7 +308,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(token, shop_id, id, color, size, "", image_ids)
+	_, err = stmt.Exec(token, shop_id, id, color, size, type_, image_ids)
 	if err != nil {
 		log.Printf("Error request execution: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -300,6 +323,15 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
+	params := make([]float64, len(paramNames))
+	for i, name := range paramNames {
+		var err error
+		params[i], err = strconv.ParseFloat(r.FormValue(name), 10)
+		if err != nil || r.FormValue(name) == "" {
+			printError(w, "invalid_request")
+			return
+		}
+	}
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -309,7 +341,8 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Commit()
 
-	stmt, err := tx.Prepare("select token, image_list from items where shop_id == ? AND item_id == ? AND color == ? AND size == ?")
+	stmt, err := tx.Prepare(fmt.Sprintf(`select token, image_list, type, %v from items where 
+		shop_id == ? AND item_id == ? AND color == ? AND size == ?`, strings.Join(paramNames, ", ")))
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -325,14 +358,28 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	success := false
-	result := ""
+	var bestType, bestParams, resultImageList string
+	var minL2Norm float64
 
 	for rows.Next() {
-		var token, image_list string
-		if rows.Scan(&token, &image_list) != nil {
+		var token, image_list, type_ string
+		dest := make([]interface{}, 3 + len(paramNames))
+		dest[0] = &token
+		dest[1] = &image_list
+		dest[2] = &type_
+		for i := range paramNames {
+			dest[i+3] = new(float64)
+		}
+
+		if err = rows.Scan(dest...); err != nil {
 			log.Print(err)
 			http.Error(w, "500 internal server error", 500)
 			return
+		}
+
+		currentParams := make([]float64, len(paramNames))
+		for i := range paramNames {
+			currentParams[i] = *(dest[i+3].(*float64))		
 		}
 
 		valid, err := isValidToken(token)
@@ -341,15 +388,27 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "500 internal server error", 500)
 			return
 		}
-
 		if !valid {
-			printError(w, "invalid_id")
-			return
-		} else {
-			success = true
-			result = image_list
+			continue
 		}
+
+		l2norm := getL2Norm(params, currentParams)
+		fmt.Println(type_, l2norm)
+		if !success {
+			success = true
+			bestType = type_
+			bestParams = strings.ReplaceAll(fmt.Sprint(currentParams), " ", ",")
+			resultImageList = image_list
+			minL2Norm = l2norm
+		} else if l2norm < minL2Norm {
+			bestType = type_
+			bestParams = strings.ReplaceAll(fmt.Sprint(currentParams), " ", ",")
+			resultImageList = image_list
+			minL2Norm = l2norm
+		}
+
 	}
+	fmt.Println()
 	if rows.Err() != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
@@ -357,8 +416,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if success {
-		result = fmt.Sprintf("\"[%v]\"", result)
-		printResult(w, result)
+		fmt.Fprintf(w, `{"error":"","result":"[%v]","type":"%v","params":%v}`, resultImageList, bestType, bestParams)
 	} else {
 		printError(w, "invalid_id")
 	}
