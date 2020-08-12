@@ -3,14 +3,11 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"time"
 	"net/http"
 	"strings"
 	"strconv"
 	"math/rand"
-	"encoding/json"
-	"github.com/boltdb/bolt"
 	"github.com/satori/go.uuid"
 	"github.com/gorilla/mux"
 )
@@ -21,21 +18,29 @@ var (
 )
 
 func addUUID(id string) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("adminUUIDs"))
-		bucket.Put([]byte(id), []byte("a"))
-		return nil
-	})
+	stmt, err := db.Prepare("insert into admin_uuids (uuid) values (?)")
+	if err != nil {
+		return fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	defer stmt.Close()
+	_, err = stmt.Exec(id)
+	if err != nil {
+		return fmt.Errorf("Error request execution: %v\n", err)
+	}
+	return nil
 }
 
 func checkUUID(id string) (bool, error) {
-	result := false
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("adminUUIDs"))
-		result = bucket.Get([]byte(id)) != nil
-		return nil
-	})
-	return result, err
+	stmt, err := db.Prepare("select * from admin_uuids where uuid == ?")
+	if err != nil {
+		return false, fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	rows, err := stmt.Query(id)
+	if err != nil {
+		return false, fmt.Errorf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	return rows.Next(), nil
 }
 
 func redirectAuthorized(w http.ResponseWriter, r *http.Request) bool {
@@ -126,33 +131,29 @@ func getRandomShopID() string {
 }
 
 func isTokenExists(token string) bool {
-	result := true
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("tokenExpirationTime"))
-		result = bucket.Get([]byte(token)) != nil
-		return nil
-	})
-
+	stmt, err := db.Prepare("select * from tokens where token == ?")
 	if err != nil {
-		log.Print(err)
-		result = true
+		log.Fatalf("Error creating stmt: %v\n", err)
 	}
-	return result
+	rows, err := stmt.Query(token)
+	if err != nil {
+		log.Fatalf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	return rows.Next()
 }
 
 func isShopIDExists(shop_id string) bool {
-	result := true
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("shopIDToken"))
-		result = bucket.Get([]byte(shop_id)) != nil
-		return nil
-	})
-
+	stmt, err := db.Prepare("select * from tokens where shop_id == ?")
 	if err != nil {
-		log.Print(err)
-		result = true
+		log.Fatalf("Error creating stmt: %v\n", err)
 	}
-	return result
+	rows, err := stmt.Query(shop_id)
+	if err != nil {
+		log.Fatalf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	return rows.Next()
 }
 
 func getRandomValidToken() string {
@@ -171,6 +172,44 @@ func getRandomValidShopID() string {
 			return shop_id
 		}
 	}
+}
+
+func getImagesCount(token string) string {
+	stmt, err := db.Prepare("select count(token) from images where token == ?")
+	if err != nil {
+		log.Printf("Error creating stmt: %v\n", err)
+		return "null"
+	}
+	rows, err := stmt.Query(token)
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		return "null"
+	}
+	defer rows.Close()
+	rows.Next()
+
+	result := ""
+	rows.Scan(&result)
+	return result
+}
+
+func getItemsCount(token string) string {
+	stmt, err := db.Prepare("select count(distinct item_id | color | size) from items where token == ?")
+	if err != nil {
+		log.Printf("Error creating stmt: %v\n", err)
+		return "null"
+	}
+	rows, err := stmt.Query(token)
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		return "null"
+	}
+	defer rows.Close()
+	rows.Next()
+
+	result := ""
+	rows.Scan(&result)
+	return result
 }
 
 func tokensHandler(w http.ResponseWriter, r *http.Request) {
@@ -198,26 +237,17 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			err = db.Update(func(tx *bolt.Tx) error {
-				bucket := tx.Bucket([]byte("tokenExpirationTime"))
-				bucket.Put([]byte(token), []byte(strconv.FormatInt(expiration_time, 10)))
-
-				bucket = tx.Bucket([]byte("shopIDToken"))
-				bucket.Put([]byte(shop_id), []byte(token))
-
-				bucket = tx.Bucket([]byte("tokens"))
-				value := tokensItem{[]string{}, []string{}, description, shop_id}
-				json_value, err := json.Marshal(value)
-				if err != nil {
-					return err
-				}
-
-				bucket.Put([]byte(token), json_value)
-				return nil
-			})
-
+			stmt, err := db.Prepare("insert into tokens (token, exp_time, description, shop_id) values (?, ?, ?, ?)")
 			if err != nil {
-				log.Print(err)
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt.Close()
+
+			_, err = stmt.Exec(token, strconv.FormatInt(expiration_time, 10), description, shop_id)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
 				http.Error(w, "500 internal server error", 500)
 				return
 			}
@@ -250,37 +280,32 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			err = db.Update(func(tx *bolt.Tx) error {
-				bucket := tx.Bucket([]byte("tokenExpirationTime"))
-				bucket.Put([]byte(token), []byte(strconv.FormatInt(expiration_time, 10)))
-
-				bucket = tx.Bucket([]byte("tokens"))
-				json_value := bucket.Get([]byte(token))
-				var value tokensItem
-				err := json.Unmarshal(json_value, &value)
-				if err != nil {
-					return err
-				}
-
-				old_shop_id := value.ShopID
-				value.ShopID = shop_id
-				value.Description = description
-
-				json_value, err = json.Marshal(value)
-				if err != nil {
-					return err
-				}
-				bucket.Put([]byte(token), json_value)
-
-				bucket = tx.Bucket([]byte("shopIDToken"))
-				bucket.Delete([]byte(old_shop_id))
-				bucket.Put([]byte(shop_id), []byte(token))
-
-				return nil
-			})
-
+			stmt, err := db.Prepare("update tokens set exp_time = ?, description = ?, shop_id = ? where token = ?")
 			if err != nil {
-				log.Print(err)
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt.Close()
+			
+			_, err = stmt.Exec(strconv.FormatInt(expiration_time, 10), description, shop_id, token)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+
+			stmt2, err := db.Prepare("update items set shop_id = ? where token = ?")
+			if err != nil {
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt2.Close()
+			
+			_, err = stmt2.Exec(shop_id, token)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
 				http.Error(w, "500 internal server error", 500)
 				return
 			}
@@ -290,70 +315,47 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 
 		} else if req_v == "delete" {
 			token := r.FormValue("token")
-
-			err := db.Update(func(tx *bolt.Tx) error {
-				bucket := tx.Bucket([]byte("tokens"))
-				json_value := bucket.Get([]byte(token))
-				if json_value == nil {
-					return nil
-				}
-				var value tokensItem
-				err := json.Unmarshal(json_value, &value)
-				if err != nil {
-					return err
-				}
-
-				// Delete token
-				err = bucket.Delete([]byte(token))
-				if err != nil {
-					return err
-				}
-
-				bucket = tx.Bucket([]byte("tokenExpirationTime"))
-				err = bucket.Delete([]byte(token))
-				if err != nil {
-					return err
-				}
-
-				// Delete shop ID
-				bucket = tx.Bucket([]byte("shopIDToken"))
-				err = bucket.Delete([]byte(value.ShopID))
-				if err != nil {
-					return err
-				}
-
-				// Delete IDs
-				bucket = tx.Bucket([]byte("IDToken"))
-				bucket2 := tx.Bucket([]byte("IDImageIDs"))
-				for _, id := range value.Ids {
-					err = bucket.Delete([]byte(id))
-					if err != nil {
-						return err
-					}
-					err = bucket2.Delete([]byte(id))
-					if err != nil {
-						return err
-					}
-				}
-
-				// Delete images
-				bucket = tx.Bucket([]byte("imageIDToken"))
-				for _, id := range value.Image_ids {
-					err = bucket.Delete([]byte(id))
-					if err != nil {
-						return err
-					}
-
-					err = os.Remove("./images/" + id + ".jpg")
-					if err != nil {
-						return err
-					}
-				}
-				return nil
-			})
-
+			stmt, err := db.Prepare("delete from images where token = ?")
 			if err != nil {
-				log.Print(err)
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt.Close()
+			
+			_, err = stmt.Exec(token)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+
+			stmt2, err := db.Prepare("delete from items where token = ?")
+			if err != nil {
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt2.Close()
+			
+			_, err = stmt2.Exec(token)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+
+			stmt3, err := db.Prepare("delete from tokens where token = ?")
+			if err != nil {
+				log.Printf("Error creating stmt: %v\n", err)
+				http.Error(w, "500 internal server error", 500)
+				return
+			}
+			defer stmt3.Close()
+			
+			_, err = stmt3.Exec(token)
+			if err != nil {
+				log.Printf("Error request execution: %v\n", err)
 				http.Error(w, "500 internal server error", 500)
 				return
 			}
@@ -375,61 +377,56 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 	html = strings.ReplaceAll(html, "{{shop_id}}", getRandomValidShopID())
 
 	token_blocks := ""
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("tokens"))
-		bucketExpTime := tx.Bucket([]byte("tokenExpirationTime"))
-		cursor := bucket.Cursor()
 
-		num := 0
-		for token, json_value := cursor.First(); token != nil; token, json_value = cursor.Next() {
-			var value tokensItem
-			err := json.Unmarshal(json_value, &value)
-			if err != nil {
-				return err
-			}
-
-			token_block := templates["token-block"]
-			token_block = strings.ReplaceAll(token_block, "{{token}}", string(token))
-			token_block = strings.ReplaceAll(token_block, "{{shop_id}}", value.ShopID)
-			token_block = strings.ReplaceAll(token_block, "{{num}}", strconv.Itoa(num))
-
-			if value.Description == "" {
-				token_block = strings.ReplaceAll(token_block, "{{br}}", "")	
-			} else {
-				token_block = strings.ReplaceAll(token_block, "{{br}}", "<br/>")
-			}
-			token_block = strings.ReplaceAll(token_block, "{{description}}", value.Description)
-			
-			token_block = strings.ReplaceAll(token_block, "{{images_count}}", 
-				strconv.Itoa(len(value.Image_ids)))
-			token_block = strings.ReplaceAll(token_block, "{{ids_count}}", 
-				strconv.Itoa(len(value.Ids)))
-
-			expTimeString := bucketExpTime.Get([]byte(token))
-			expTime, err := strconv.ParseInt(string(expTimeString), 10, 64)
-			if err != nil {
-				return err
-			}
-
-			expired := expTime <= time.Now().Unix()
-			time_string := time.Unix(expTime, 0).UTC().Format("2006-01-02 15:04:05 UTC")
-			time_string_default := time.Unix(expTime, 0).UTC().Format("2006-01-02T15:04:05")
-			token_block = strings.ReplaceAll(token_block, "{{exp_time_default}}", time_string_default)
-
-			if expired {
-				token_block = strings.ReplaceAll(token_block, "{{exp_time}}",
-					"<span class=\"text-danger\">Expired:</span> " + time_string)
-			} else {
-				token_block = strings.ReplaceAll(token_block, "{{exp_time}}", 
-					"Valid through: " + time_string)
-			}
-
-			token_blocks += token_block
-			num++
+	rows, err := db.Query("select * from tokens")
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	
+	num := 0
+	for rows.Next() {
+		var token, description, shop_id string
+		var expTime int64
+		err := rows.Scan(&token, &expTime, &description, &shop_id)
+		if err != nil {
+			log.Print(err)
+			http.Error(w, "500 internal server error", 500)
+			return
 		}
 
-		return nil
-	})
+		token_block := templates["token-block"]
+		token_block = strings.ReplaceAll(token_block, "{{token}}", token)
+		token_block = strings.ReplaceAll(token_block, "{{shop_id}}", shop_id)
+		token_block = strings.ReplaceAll(token_block, "{{num}}", strconv.Itoa(num))
+
+		if description == "" {
+			token_block = strings.ReplaceAll(token_block, "{{br}}", "")	
+		} else {
+			token_block = strings.ReplaceAll(token_block, "{{br}}", "<br/>")
+		}
+		token_block = strings.ReplaceAll(token_block, "{{description}}", description)
+		
+		token_block = strings.ReplaceAll(token_block, "{{images_count}}", getImagesCount(token))
+		token_block = strings.ReplaceAll(token_block, "{{ids_count}}", getItemsCount(token))
+
+		expired := expTime <= time.Now().Unix()
+		time_string := time.Unix(expTime, 0).UTC().Format("2006-01-02 15:04:05 UTC")
+		time_string_default := time.Unix(expTime, 0).UTC().Format("2006-01-02T15:04:05")
+		token_block = strings.ReplaceAll(token_block, "{{exp_time_default}}", time_string_default)
+
+		if expired {
+			token_block = strings.ReplaceAll(token_block, "{{exp_time}}",
+				"<span class=\"text-danger\">Expired:</span> " + time_string)
+		} else {
+			token_block = strings.ReplaceAll(token_block, "{{exp_time}}", 
+				"Valid through: " + time_string)
+		}
+
+		token_blocks += token_block
+		num++
+	}
 
 	if err != nil {
 		log.Print(err)

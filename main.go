@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"github.com/gorilla/mux"
 	"golang.org/x/time/rate"
-	"github.com/boltdb/bolt"
-	"encoding/json"
+	_ "github.com/mattn/go-sqlite3"
+	"database/sql"
 	"math/rand"
 	"time"
 	"os"
@@ -22,14 +22,9 @@ var (
 	templateNames = []string{"login", "tokens", "token-block"}
 	staticNames = []string{"login.css", "login.js", "tokens.css", "tokens.js"}
 	limiter = rate.NewLimiter(1, 1000)
-	db *bolt.DB
+	db *sql.DB
 	server *http.Server
 )
-
-type tokensItem struct {
-	Image_ids, Ids []string
-	Description, ShopID string
-}
 
 func getRandomID() string {
 	const N = 12
@@ -60,59 +55,62 @@ func getRequestFile(r *http.Request) (multipart.File, bool) {
 }
 
 func isValidToken(token string) (bool, error) {
-	result := false
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("tokenExpirationTime"))
-		expTimeString := bucket.Get([]byte(token))
-		if expTimeString == nil {
-			return nil
-		}
-		expTime, err := strconv.ParseInt(string(expTimeString), 10, 64)
-		if err != nil {
-			return err
-		}
+	stmt, err := db.Prepare("select exp_time from tokens where token == ?")
+	if err != nil {
+		return false, fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	rows, err := stmt.Query(token)
+	if err != nil {
+		return false, fmt.Errorf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, nil
+	}
 
-		result = expTime > time.Now().Unix()
-		return nil
-	})
-	return result, err
+	var exp_time int64
+	if err = rows.Scan(&exp_time); err != nil {
+		return false, err
+	}
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
+
+	return exp_time > time.Now().Unix(), nil
 }
 
 func addImageIDtoDB(token, image_id string) error {
-	return db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("tokens"))
-		json_value := bucket.Get([]byte(token))
-		var value tokensItem
-		err := json.Unmarshal(json_value, &value)
-		if err != nil {
-			return err
-		}
-
-		value.Image_ids = append(value.Image_ids, image_id)
-		json_value, err = json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		bucket.Put([]byte(token), json_value)
-
-		bucket = tx.Bucket([]byte("imageIDToken"))
-		bucket.Put([]byte(image_id), []byte(token))
-		return nil
-	})
+	stmt, err := db.Prepare("insert into images (token, image_id) values (?, ?)")
+	if err != nil {
+		return fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	defer stmt.Close()
+	_, err = stmt.Exec(token, image_id)
+	if err != nil {
+		return fmt.Errorf("Error request execution: %v\n", err)
+	}
+	return nil
 }
 
 func isImageIDExists(image_id string) bool {
-	var result bool
-	db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("imageIDToken"))
-		token := bucket.Get([]byte(image_id))
-		result = token != nil
-		return nil
-	})
-	return result
+	stmt, err := db.Prepare("select * from images where image_id == ?")
+	if err != nil {
+		log.Fatalf("Error creating stmt: %v\n", err)
+	}
+	rows, err := stmt.Query(image_id)
+	if err != nil {
+		log.Fatalf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	return rows.Next()
 }
 
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
+	if !limiter.Allow() {
+		printError(w, "flood_limit")
+		return
+	}
+
 	r.ParseMultipartForm(1 << 23)
 	token := r.FormValue("token")
 	valid, err := isValidToken(token)
@@ -132,11 +130,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer reqfile.Close()
-
-	if !limiter.Allow() {
-		printError(w, "flood_limit")
-		return
-	}
 
 	image_id := getRandomID()
 	for ;isImageIDExists(image_id); {
@@ -161,40 +154,35 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	printResult(w, "\"" + image_id + "\"")
 }
 
-func isIDExists(id string) bool {
-	var result bool
-	db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("IDToken"))
-		token := bucket.Get([]byte(id))
-		result = token != nil
-		return nil
-	})
-	return result
-}
-
 func isValidImageIDs(image_ids string) (bool, error) {
 	ids := strings.Split(image_ids, ",")
 	if len(ids) > maxImagesPerID || image_ids == "" {
 		return false, nil
 	}
 
-	result := true
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("imageIDToken"))
-		for _, id := range ids {
-			token := bucket.Get([]byte(id))
-			if token == nil {
-				result = false
-				return nil
-			}
-		}
-		return nil			
-	})
-
+	tx, err := db.Begin()
 	if err != nil {
-		return result, err
+		return false, fmt.Errorf("Error creating database transaction: %v\n", err)
 	}
-	return result, nil
+	defer tx.Commit()
+
+	stmt, err := tx.Prepare("select image_id from images where image_id == ?")
+	if err != nil {
+		return false, fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	defer stmt.Close()
+	for _, image_id := range ids {
+		rows, err := stmt.Query(image_id)
+		if err != nil {
+			return false, fmt.Errorf("Error query execution: %v\n", err)
+		}
+		if !rows.Next() {
+			rows.Close()
+			return false, nil
+		}	
+		rows.Close()
+	}
+	return true, nil
 }
 
 func imageIDsToJSON(image_ids string) string {
@@ -207,33 +195,54 @@ func imageIDsToJSON(image_ids string) string {
 }
 
 func getShopID(token string) (string, error) {
-	var result string
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("tokens"))
-		json_value := bucket.Get([]byte(token))
-		var value tokensItem
-		err := json.Unmarshal(json_value, &value)
-		if err != nil {
-			return err
-		}
-		
-		result = value.ShopID
-		return nil
-	})
-	return result, err
+	stmt, err := db.Prepare("select shop_id from tokens where token == ?")
+	if err != nil {
+		return "", fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	rows, err := stmt.Query(token)
+	if err != nil {
+		return "", fmt.Errorf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return "", fmt.Errorf("Token %v\n not exists", token)
+	}
+
+	var shop_id string
+	if rows.Scan(&shop_id) != nil {
+		return "", err
+	}
+	if rows.Err() != nil {
+		return "", err
+	}
+	return shop_id, nil
 }
 
-func packID(shop_id, id, color, size string) string {
-	return shop_id + ";" + id + ";" + color + ";" + size
-}
+func isItemExists(id, color, size, type_ string) bool {
+	stmt, err := db.Prepare("select * from items where item_id == ? AND color == ? AND size == ? AND type == ?")
+	if err != nil {
+		log.Fatalf("Error creating stmt: %v\n", err)
+	}
+	rows, err := stmt.Query(id, color, size, type_)
+	if err != nil {
+		log.Fatalf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	return rows.Next()
+} 
 
 func updateHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
+	// type_ := r.FormValue("type")
 	image_ids := r.FormValue("image_ids")
 	token := r.FormValue("token")
 
+	if !limiter.Allow() {
+		printError(w, "flood_limit")
+		return
+	}
 	valid, err := isValidToken(token)
 	if err != nil {
 		log.Print(err)
@@ -251,7 +260,6 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	id = packID(shop_id, id, color, size)
 
 	valid, err = isValidImageIDs(image_ids)
 	if err != nil {
@@ -264,44 +272,26 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isIDExists(id) {
+	if isItemExists(id, color, size, "") {
 		printError(w, "invalid_request")
 		return
 	}
-	if !limiter.Allow() {
-		printError(w, "flood_limit")
-		return
-	}
 
-	err = db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("IDImageIDs"))
-		bucket.Put([]byte(id), []byte(imageIDsToJSON(image_ids)))
-
-		bucket = tx.Bucket([]byte("IDToken"))
-		bucket.Put([]byte(id), []byte(token))
-
-		bucket = tx.Bucket([]byte("tokens"))
-		json_value := bucket.Get([]byte(token))
-		var value tokensItem
-		err := json.Unmarshal(json_value, &value)
-		if err != nil {
-			return err
-		}
-
-		value.Ids = append(value.Ids, id)
-		json_value, err = json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		bucket.Put([]byte(token), json_value)
-		return nil
-	})
-
+	stmt, err := db.Prepare("insert into items (token, shop_id, item_id, color, size, type, image_list) values (?, ?, ?, ?, ?, ?, ?)")
 	if err != nil {
-		log.Print(err)
+		log.Printf("Error creating stmt: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
+	defer stmt.Close()
+
+	_, err = stmt.Exec(token, shop_id, id, color, size, "", image_ids)
+	if err != nil {
+		log.Printf("Error request execution: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+
 	printResult(w, "\"\"")
 }
 
@@ -310,73 +300,129 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
-	id = packID(shop_id, id, color, size)
 
-	valid := true
-	var result string
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("IDToken"))
-		token := bucket.Get([]byte(id))
-		if token == nil {
-			valid = false
-			return nil
-		}
-
-		bucket = tx.Bucket([]byte("tokenExpirationTime"))
-		expTime, err := strconv.ParseInt(string(bucket.Get([]byte(token))), 10, 64)
-		if err != nil {
-			 return err
-		}
-		if expTime <= time.Now().Unix() {
-			valid = false
-			return nil
-		}
-
-		bucket = tx.Bucket([]byte("IDImageIDs"))
-		result = string(bucket.Get([]byte(id)))
-		return nil
-	})
-
+	tx, err := db.Begin()
 	if err != nil {
+		log.Printf("Error creating database transaction: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer tx.Commit()
+
+	stmt, err := tx.Prepare("select token, image_list from items where shop_id == ? AND item_id == ? AND color == ? AND size == ?")
+	if err != nil {
+		log.Printf("Error creating stmt: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer stmt.Close()
+	rows, err := stmt.Query(shop_id, id, color, size)
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer rows.Close()
+
+	success := false
+	result := ""
+
+	for rows.Next() {
+		var token, image_list string
+		if rows.Scan(&token, &image_list) != nil {
+			log.Print(err)
+			http.Error(w, "500 internal server error", 500)
+			return
+		}
+
+		valid, err := isValidToken(token)
+		if err != nil {
+			log.Print(err)
+			http.Error(w, "500 internal server error", 500)
+			return
+		}
+
+		if !valid {
+			printError(w, "invalid_id")
+			return
+		} else {
+			success = true
+			result = image_list
+		}
+	}
+	if rows.Err() != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	if !valid {
-		printError(w, "invalid_id")
-		return
-	}
 
-	printResult(w, result)
+	if success {
+		result = fmt.Sprintf("\"[%v]\"", result)
+		printResult(w, result)
+	} else {
+		printError(w, "invalid_id")
+	}
 }
 
 func isValidImageID(id string) (bool, error) {
-	result := false
-	err := db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("imageIDToken"))
-		token := bucket.Get([]byte(id))
-		if token == nil {
-			return nil
-		}
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("Error creating database transaction: %v\n", err)
+	}
+	defer tx.Commit()
 
-		bucket = tx.Bucket([]byte("tokenExpirationTime"))
-		expTime, err := strconv.ParseInt(string(bucket.Get([]byte(token))), 10, 64)
-		if err != nil {
-			 return err
-		}
+	stmt, err := tx.Prepare("select token from images where image_id == ?")
+	if err != nil {
+		return false, fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	defer stmt.Close()
+	rows, err := stmt.Query(id)
+	if err != nil {
+		return false, fmt.Errorf("Error query execution: %v\n", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, nil
+	}
 
-		result = expTime > time.Now().Unix()
-		return nil
-	})
+	var token string
+	if err = rows.Scan(&token); err != nil {
+		return false, err
+	}
+	if err = rows.Err(); err != nil {
+		return false, err
+	}
 
-	return result, err
+	stmt2, err := tx.Prepare("select exp_time from tokens where token == ?")
+	if err != nil {
+		return false, fmt.Errorf("Error creating stmt: %v\n", err)
+	}
+	defer stmt2.Close()
+	rows2, err := stmt2.Query(token)
+	if err != nil {
+		return false, fmt.Errorf("Error query execution: %v\n", err)
+	}
+	defer rows2.Close()
+	if !rows2.Next() {
+		return false, nil
+	}
+
+	var exp_time int64
+	if err = rows2.Scan(&exp_time); err != nil {
+		return false, err
+	}
+	if err = rows2.Err(); err != nil {
+		return false, err
+	}
+
+	return exp_time > time.Now().Unix(), nil
 }
 
 func imageHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	valid, err := isValidImageID(id)
 	if err != nil {
-		log.Print(err)
+		log.Print("Database error:", err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
@@ -398,59 +444,42 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, file)
 }
 
-// func createToken(token string, duration time.Duration) {
-// 	expTime := time.Now().Add(duration).Unix()
-// 	err := db.Update(func(tx *bolt.Tx) error {
-// 		bucket := tx.Bucket([]byte("tokenExpirationTime"))
-// 		bucket.Put([]byte(token), []byte(strconv.FormatInt(expTime, 10)))
+func createTablesIfNotExists() {
+	sqlStmt := fmt.Sprintf(`
+	create table if not exists images (
+		id integer not null primary key autoincrement, 
+		token text not null, 
+		image_id text not null
+	);
 
-// 		bucket = tx.Bucket([]byte("tokens"))
-// 		value := tokensItem{}
-// 		json_value, err := json.Marshal(value)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		bucket.Put([]byte(token), []byte(json_value))
-// 		return nil
-// 	})
+	create table if not exists items (
+		id integer not null primary key autoincrement, 
+		token text not null,
+		shop_id text not null,
+		item_id text not null, 
+		color text,
+		size text,
+		type integer not null,
+		%s,
+		image_list text
+	);
 
-// 	if err != nil {
-// 		db.Close()
-// 		log.Fatal(err)
-// 	}
-// }
+	create table if not exists tokens (
+		token text not null primary key,
+		exp_time time not null,
+		description text,
+		shop_id text
+	);
 
-func createNewDatabase() {
-	err := db.Update(func(tx *bolt.Tx) error {
-		var result []string
-		err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-			result = append(result, string(name))
-			return nil
-		})
-		if err != nil {
-			 return err
-		}
+	create table if not exists admin_uuids (
+		uuid text not null primary key
+	);
 
-		for _, bucket := range result {
-			err := tx.DeleteBucket([]byte(bucket))
-			if err != nil {
-				return err
-			}
-		}
+	`, strings.Join(paramNames, " float,\n		") + " float")
 
-		buckets := []string{"IDImageIDs", "IDToken", "imageIDToken", "tokenExpirationTime", "tokens", "adminUUIDs", "shopIDToken"}
-		for _, bucket := range buckets {
-			_, err := tx.CreateBucket([]byte(bucket))
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-
+	_, err := db.Exec(sqlStmt)
 	if err != nil {
-		db.Close()
-		log.Fatal(err)
+		log.Fatal("Error creating tables:", err)
 	}
 }
 
@@ -458,13 +487,13 @@ func main() {
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	var err error
-	db, err = bolt.Open("database.db", 0600, nil)
+	db, err = sql.Open("sqlite3", "sqlite3.db")
 	if err != nil {
 		log.Fatal("Error opening database:", err)
 	}
 	defer db.Close()
+	createTablesIfNotExists()
 
-	
 	for _, name := range templateNames {
 		file, err := os.Open("templates/" + name + ".html")
 		if err != nil {
@@ -492,10 +521,6 @@ func main() {
 		static[name] = string(content)
 		file.Close()
 	}
-
-	// for i := 0;i<=24;i++ {
-	// 	createToken(strconv.Itoa(i) + "m", time.Minute * time.Duration(i))
-	// }
 	
 	r := mux.NewRouter()
 	r.HandleFunc(prefix + "/upload", uploadHandler).Methods("POST")

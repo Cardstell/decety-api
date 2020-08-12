@@ -7,4 +7,5 @@ var (
 	defaultPassword = "rqMhPnODHeam"
 
 	maxImagesPerID = 50
+	paramNames = []string{"d1", "d2", "d3", "d4", "d5"}
 )
