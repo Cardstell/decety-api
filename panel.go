@@ -409,7 +409,7 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 		token_block = strings.ReplaceAll(token_block, "{{description}}", description)
 		
 		token_block = strings.ReplaceAll(token_block, "{{images_count}}", getImagesCount(token))
-		token_block = strings.ReplaceAll(token_block, "{{ids_count}}", getItemsCount(token))
+		token_block = strings.ReplaceAll(token_block, "{{items_count}}", getItemsCount(token))
 
 		expired := expTime <= time.Now().Unix()
 		time_string := time.Unix(expTime, 0).UTC().Format("2006-01-02 15:04:05 UTC")

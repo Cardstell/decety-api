@@ -62,11 +62,11 @@ func mustOpen(f string) *os.File {
 	return r
 }
 
-func uploadPhoto(t *testing.T, token string) (int, string) {
+func uploadPhoto(t *testing.T, token, filename string) (int, string) {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 	values := map[string]io.Reader{
-		"file":  mustOpen("./sample.jpg"), 
+		"file":  mustOpen(filename), 
 		"token": strings.NewReader(token),
 	}
 
@@ -115,7 +115,7 @@ func uploadPhoto(t *testing.T, token string) (int, string) {
 
 func testUploadSuccess(token string) func(t *testing.T) {
 	return func(t *testing.T) {
-		status_code, body := uploadPhoto(t, token)
+		status_code, body := uploadPhoto(t, token, "./sample.jpg")
 		if status_code != 200 {
 			t.Fatalf("Status code doesn't equal 200")
 		}
@@ -138,7 +138,7 @@ func testUploadSuccess(token string) func(t *testing.T) {
 
 func testUploadFail(token string) func(t *testing.T) {
 	return func(t *testing.T) {
-		status_code, body := uploadPhoto(t, token)
+		status_code, body := uploadPhoto(t, token, "./sample.jpg")
 		if status_code != 200 {
 			t.Fatalf("Status code doesn't equal 200")
 		}
@@ -186,14 +186,19 @@ func getUnixTime(shift time.Duration) string {
 
 func TestAll(t *testing.T) {
 	go main()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 
 	t.Run("Test uploading with invalid token", testUploadFail(""))
 	t.Run("Test uploading with invalid token", testUploadFail("12345"))
 
-	t.Run("Test creating token", testCreateToken)
-	t.Run("Test editing token", testEditToken)
-	t.Run("Test deleting token", testDeleteToken)
+	// t.Run("Test creating token", testCreateToken)
+	// t.Run("Test editing token", testEditToken)
+	// t.Run("Test deleting token", testDeleteToken)
+
+	// t.Run("Test creating token", testCreateToken)
+	createToken(t, login(t), "test_token", "1234", "", getUnixTime(1000 * time.Hour))
+	t.Run("Benchmark uploading photos", benchUploading)
+	t.Run("Benchmark updating data", benchUpdating)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100 * time.Millisecond)
 	defer cancel()
