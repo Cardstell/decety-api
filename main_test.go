@@ -191,14 +191,14 @@ func TestAll(t *testing.T) {
 	t.Run("Test uploading with invalid token", testUploadFail(""))
 	t.Run("Test uploading with invalid token", testUploadFail("12345"))
 
-	// t.Run("Test creating token", testCreateToken)
-	// t.Run("Test editing token", testEditToken)
-	// t.Run("Test deleting token", testDeleteToken)
+	t.Run("Test creating token", testCreateToken)
+	t.Run("Test editing token", testEditToken)
+	t.Run("Test deleting token", testDeleteToken)
 
 	// t.Run("Test creating token", testCreateToken)
-	createToken(t, login(t), "test_token", "1234", "", getUnixTime(1000 * time.Hour))
-	t.Run("Benchmark uploading photos", benchUploading)
-	t.Run("Benchmark updating data", benchUpdating)
+	// createToken(t, login(t), "test_token", "1234", "", getUnixTime(1000 * time.Hour))
+	// t.Run("Benchmark uploading photos", benchUploading)
+	// t.Run("Benchmark updating data", benchUpdating)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100 * time.Millisecond)
 	defer cancel()

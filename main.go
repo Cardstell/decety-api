@@ -393,7 +393,6 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		l2norm := getL2Norm(params, currentParams)
-		fmt.Println(type_, l2norm)
 		if !success {
 			success = true
 			bestType = type_
@@ -408,7 +407,6 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 	}
-	fmt.Println()
 	if rows.Err() != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
