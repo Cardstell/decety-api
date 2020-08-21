@@ -10,6 +10,10 @@ import (
 	"database/sql"
 	"math/rand"
 	"time"
+	"github.com/disintegration/imaging"
+	"image"
+	"image/jpeg"
+	"path/filepath"
 	"os"
 	"io"
 	"io/ioutil"
@@ -105,6 +109,25 @@ func isImageIDExists(image_id string) bool {
 	return rows.Next()
 }
 
+func generatePreview(file multipart.File, image_id string) error {
+	fullImage, _, err := image.Decode(file)
+	if err != nil {
+		return err
+	}
+
+	previewImage := imaging.Thumbnail(fullImage, 80, 80, imaging.CatmullRom)
+	newImage, err := os.Create("images/previews/" + image_id + ".jpg")
+	if err != nil {
+		return err
+	}
+	defer newImage.Close()
+
+	if jpeg.Encode(newImage, previewImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
+		return err
+	}
+	return nil
+}
+
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if !limiter.Allow() {
 		printError(w, "flood_limit")
@@ -143,6 +166,17 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	io.Copy(file, reqfile)
 	file.Close()
+
+	if _, err := reqfile.Seek(0, 0); err != nil {
+		log.Print(err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	if err = generatePreview(reqfile, image_id); err != nil {
+		log.Print(err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
 
 	err = addImageIDtoDB(token, image_id)
 	if err != nil {
@@ -541,6 +575,7 @@ func createTablesIfNotExists() {
 
 func main() {
 	rand.Seed(time.Now().UTC().UnixNano())
+	os.MkdirAll(filepath.Join(".", "images/previews"), os.ModePerm)
 
 	var err error
 	db, err = sql.Open("sqlite3", "sqlite3.db")
@@ -587,6 +622,8 @@ func main() {
 	r.HandleFunc(prefix + "/dc-admin-p/tokens", tokensHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/items", itemsHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/static/{name}", staticHandler).Methods("GET")
+	r.HandleFunc(prefix + "/dc-admin-p/image/{id}", imagePanelHandler).Methods("GET")
+	r.HandleFunc(prefix + "/dc-admin-p/preview/{id}", previewHandler).Methods("GET")
 	server = &http.Server{
 		Handler: r,
 		Addr: ":" + port,

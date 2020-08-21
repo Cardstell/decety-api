@@ -103,16 +103,20 @@ function loadItems(token, num) {
 					id1 = getRandomString();
 					id2 = getRandomString();
 
-
-					subblock += "<details class=\"my-1\" id=\"" + id1 + "\"><summary>" + subblock_summary + 
-						"</summary><div id=\"" + id2 + "\" class=\"d-flex flex-row\"></div></details>"
+					subblock += "<details class=\"my-1\" id=\"" + id1 + "\"><summary>" + subblock_summary + "</summary><div id=\"" 
+						+ id2 + "\" class=\"d-flex flex-row flex-wrap shadow-box rounded images-block\"></div></details>"
 					$('body').on('click', '#' + id1, function(image_list, id2) {
 						return function() {
-							var dest = document.getElementById(id2);
+							var item_container = document.getElementById(id2);
+							var result = "";
+							
 							for (var k = 0;k<image_list.length;++k) {
 								var image_id = image_list[k];
-								dest.innerHTML += "<img src=\"../image/" + image_id + "\">"
+								result += "<a href=\"image/" + image_id + "\" class=\"m-1 border border-dark shadow rounded\"><img src=\"preview/" +
+									image_id + "\" class=\"border border-dark shadow rounded\"></a>";
 							}
+
+							item_container.innerHTML = result;
 						}
 					}(response[i].items[j].image_list, id2))
 				}
@@ -120,6 +124,11 @@ function loadItems(token, num) {
 				block += "<details class=\"my-1\"><summary>" + summary + "</summary><div class=\"ml-4\">"
 					+ subblock + "</div></details>";
 			}
+
+			if (block === "") {
+				block = "<p>No items</p>";
+			}
+
 			modal_body.innerHTML = block
 		}
 	};

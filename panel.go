@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"github.com/satori/go.uuid"
 	"github.com/gorilla/mux"
+	"os"
+	"io"
 )
 
 var (
@@ -593,4 +595,44 @@ func staticHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", content_type)
 	fmt.Fprint(w, file)
+}
+
+func imagePanelHandler(w http.ResponseWriter, r *http.Request) {
+	if redirectUnauthorized(w, r) {
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	file, err := os.Open("./images/" + id + ".jpg")
+	if err != nil {
+		http.Error(w, "404 file not found", 404)
+		return
+	}
+	defer file.Close()
+
+	fileStat, _ := file.Stat()
+	fileSize := strconv.FormatInt(fileStat.Size(), 10)
+	w.Header().Set("Content-Type", "image/jpg")
+	w.Header().Set("Content-Length", fileSize)
+	io.Copy(w, file)
+}
+
+func previewHandler(w http.ResponseWriter, r *http.Request) {
+	if redirectUnauthorized(w, r) {
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	file, err := os.Open("./images/previews/" + id + ".jpg")
+	if err != nil {
+		http.Error(w, "404 file not found", 404)
+		return
+	}
+	defer file.Close()
+
+	fileStat, _ := file.Stat()
+	fileSize := strconv.FormatInt(fileStat.Size(), 10)
+	w.Header().Set("Content-Type", "image/jpg")
+	w.Header().Set("Content-Length", fileSize)
+	io.Copy(w, file)
 }
