@@ -585,6 +585,7 @@ func main() {
 	r.HandleFunc(prefix + "/image/{id}", imageHandler).Methods("GET")
 	r.HandleFunc(prefix + "/dc-admin-p/", loginHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/tokens", tokensHandler).Methods("GET", "POST")
+	r.HandleFunc(prefix + "/dc-admin-p/items", itemsHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/static/{name}", staticHandler).Methods("GET")
 	server = &http.Server{
 		Handler: r,

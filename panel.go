@@ -8,6 +8,8 @@ import (
 	"strings"
 	"strconv"
 	"math/rand"
+	"bytes"
+	"encoding/json"
 	"github.com/satori/go.uuid"
 	"github.com/gorilla/mux"
 )
@@ -436,6 +438,131 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 
 	html = strings.ReplaceAll(html, "{{container}}", token_blocks)
 	fmt.Fprint(w, html)
+}
+
+type jsonItem struct {
+	Item_id string 			`json:"item_id"`
+	Color string 			`json:"color"`
+	Size string 			`json:"size"`
+	Items []jsonTypeItem 	`json:"items"`
+}
+
+type jsonTypeItem struct {
+	type_ string
+	params []float64
+	image_list string
+}
+
+type keyItem struct {
+	Item_id string
+	Color string
+	Size string
+}
+
+func (item jsonTypeItem) MarshalJSON() ([]byte, error) {
+	buffer := bytes.NewBufferString("{")
+	jsonValue, err := json.Marshal(item.type_)
+	if err != nil {
+		return nil, err
+	}
+	buffer.WriteString("\"type\":" + string(jsonValue) + ",")
+
+	for i, name := range paramNames {
+		jsonValue, err := json.Marshal(item.params[i])
+		if err != nil {
+			return nil, err
+		}
+		buffer.WriteString(fmt.Sprintf("\"%s\":%s,", name, string(jsonValue)))
+	}
+
+	buffer.WriteString("\"image_list\":[")
+	ids := strings.Split(item.image_list, ",")
+	for i, id := range ids {
+		jsonValue, err := json.Marshal(id)
+		if err != nil {
+			return nil, err
+		}
+		buffer.WriteString(string(jsonValue))
+		if i != len(ids) - 1 {
+			buffer.WriteString(",")
+		}
+	}
+
+	buffer.WriteString("]}")
+	return buffer.Bytes(), nil
+}
+
+func itemsHandler(w http.ResponseWriter, r *http.Request) {
+	if redirectUnauthorized(w, r) {
+		return
+	}
+
+	token := r.FormValue("token")
+
+	stmt, err := db.Prepare(fmt.Sprintf("select item_id, color, size, type, image_list, %v from items where token == ?", 
+		strings.Join(paramNames, ", ")))
+	if err != nil {
+		log.Printf("Error creating stmt: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.Query(token)
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer rows.Close()
+
+	items := make(map[keyItem][]jsonTypeItem)
+
+	for rows.Next() {
+		var item_id, color, size, type_, image_list string
+		dest := make([]interface{}, 5 + len(paramNames))
+		dest[0] = &item_id
+		dest[1] = &color
+		dest[2] = &size
+		dest[3] = &type_
+		dest[4] = &image_list
+		for i := range paramNames {
+			dest[i+5] = new(float64)
+		}
+
+		if err = rows.Scan(dest...); err != nil {
+			log.Print(err)
+			http.Error(w, "500 internal server error", 500)
+			return
+		}
+
+		params := make([]float64, len(paramNames))
+		for i := range paramNames {
+			params[i] = *(dest[i+5].(*float64))		
+		}
+
+		items[keyItem{item_id, color, size}] = append(items[keyItem{item_id, color, size}], 
+			jsonTypeItem{type_, params, image_list})
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Printf("Error scanning rows: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+
+	result := []jsonItem{}
+	for key, typeItems := range items {
+		result = append(result, jsonItem{key.Item_id, key.Color, key.Size, typeItems})
+	}
+	json_result, err := json.Marshal(result)
+	if err != nil {
+		log.Printf("Error json serializing: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+
+	fmt.Fprint(w, string(json_result))
 }
 
 func isLoginStatic(name string) bool {

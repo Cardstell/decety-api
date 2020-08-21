@@ -16,6 +16,10 @@ html {
 	background-color: #f0f0f0;
 }
 
+.buttons-block {
+	margin-top: -10px;
+}
+
 #new-token-button {
 	background-color: #e5e5e5;
 }
