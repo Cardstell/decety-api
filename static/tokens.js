@@ -136,7 +136,3 @@ function loadItems(token, num) {
 	xhttp.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
 	xhttp.send("token=" + token);
 }
-
-function loadImages(id, image_list) {
-	console.log(id, image_list)
-}
