@@ -325,8 +325,8 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isItemExists(id, color, size, type_) {
-		printError(w, "invalid_request")
+	if isItemExists(id, color, size, type_) || id == "" {
+		printError(w, "invalid_id")
 		return
 	}
 

@@ -31,13 +31,14 @@ for i in range(num_images):
 
 def create_item(token, item_id, color, size, type_):
 	random.shuffle(image_ids)
-	image_list = ','.join(image_ids[:random.randint(0, len(image_ids)-1)])
-	s.post(url + 'update', data={'token': token, 'id': item_id, 'color': color, 'size': size, 'type': type_, 'image_ids': image_list,
+	image_list = ','.join(image_ids[:random.randint(1, len(image_ids)-1)])
+	data = {'token': token, 'id': item_id, 'color': color, 'size': size, 'type': type_, 'image_ids': image_list,
 		'd1': random.uniform(1600, 1900),
 		'd2': random.uniform(700, 1500),
 		'd3': random.uniform(900, 1500),
 		'd4': random.uniform(900, 1500),
-		'd5': random.uniform(300, 500)})
+		'd5': random.uniform(300, 500)}
+	s.post(url + 'update', data=data)
 
 create_item(valid_token, 'Mamalicious maternity jersey shorts', 'black', 'M', 0)
 create_item(valid_token, 'Mamalicious maternity jersey shorts', 'black', 'M', 1)
