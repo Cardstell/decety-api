@@ -20,6 +20,10 @@ html {
 	background-color: #f0f0f0;
 }
 
+.requests-count {
+	color: #808080;
+}
+
 .buttons-block {
 	margin-top: -10px;
 }

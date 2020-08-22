@@ -90,6 +90,7 @@ function loadItems(token, num) {
 				var summary = response[i].item_id;
 				if (response[i].color !== "") summary += ", Color: " + response[i].color;
 				if (response[i].size !== "") summary += ", Size: " + response[i].size;
+				if (response[i].description !== "") summary += ", Description: " + response[i].description;
 
 				var subblock = ""
 				for (var j = 0;j<response[i].items.length;j++) {
@@ -103,8 +104,9 @@ function loadItems(token, num) {
 					id1 = getRandomString();
 					id2 = getRandomString();
 
-					subblock += "<details class=\"my-1\" id=\"" + id1 + "\"><summary>" + subblock_summary + "</summary><div id=\"" 
-						+ id2 + "\" class=\"d-flex flex-row flex-wrap shadow-box rounded images-block\"></div></details>"
+					subblock += "<details class=\"my-1\" id=\"" + id1 + "\"><summary class=\"d-flex flex-row\"><p class=\"mr-1 mb-0\">" + subblock_summary + 
+						"</p><p class=\"text-right text-nowrap requests-count ml-auto mb-0\">" + response[i].items[j].requests_count + "</p></summary><div id=\"" + id2 + 
+						"\" class=\"d-flex flex-row flex-wrap shadow-box rounded images-block\"></div></details>";
 					$('body').on('click', '#' + id1, function(image_list, id2) {
 						return function() {
 							var item_container = document.getElementById(id2);
@@ -121,7 +123,8 @@ function loadItems(token, num) {
 					}(response[i].items[j].image_list, id2))
 				}
 
-				block += "<details class=\"my-1\"><summary>" + summary + "</summary><div class=\"ml-4\">"
+				block += "<details class=\"my-1\"><summary class=\"d-flex flex-row\"><p class=\"mb-0 mr-1\">" + summary + 
+					"</p><p class=\"text-right text-nowrap requests-count ml-auto mb-0\">" + response[i].requests_count + "</p></summary><div class=\"ml-4\">"
 					+ subblock + "</div></details>";
 			}
 

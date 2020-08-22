@@ -252,12 +252,12 @@ func getShopID(token string) (string, error) {
 	return shop_id, nil
 }
 
-func isItemExists(id, color, size, type_ string) bool {
-	stmt, err := db.Prepare("select * from items where item_id == ? AND color == ? AND size == ? AND type == ?")
+func isItemExists(id, color, size, description, type_ string) bool {
+	stmt, err := db.Prepare("select * from items where item_id == ? AND color == ? AND size == ? AND description == ? AND type == ?")
 	if err != nil {
 		log.Fatalf("Error creating stmt: %v\n", err)
 	}
-	rows, err := stmt.Query(id, color, size, type_)
+	rows, err := stmt.Query(id, color, size, description, type_)
 	if err != nil {
 		log.Fatalf("Error query execution: %v\n", err)
 	}
@@ -279,6 +279,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
+	description := r.FormValue("description")
 	type_ := r.FormValue("type")
 	image_ids := r.FormValue("image_ids")
 	token := r.FormValue("token")
@@ -325,13 +326,13 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isItemExists(id, color, size, type_) || id == "" {
+	if isItemExists(id, color, size, description, type_) || id == "" {
 		printError(w, "invalid_id")
 		return
 	}
 
-	stmt, err := db.Prepare(fmt.Sprintf(`insert into items (token, shop_id, item_id, color, size, type, image_list, %s) 
-		values (?, ?, ?, ?, ?, ?, ?, %s)`, 
+	stmt, err := db.Prepare(fmt.Sprintf(`insert into items (token, shop_id, item_id, color, size, description, type, image_list, %s, requests_count) 
+		values (?, ?, ?, ?, ?, ?, ?, ?, %s, 0)`, 
 		strings.Join(paramNames[:], ", "), 
 		strings.Join(params, ", ")))
 
@@ -342,7 +343,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stmt.Close()
 
-	_, err = stmt.Exec(token, shop_id, id, color, size, type_, image_ids)
+	_, err = stmt.Exec(token, shop_id, id, color, size, description, type_, image_ids)
 	if err != nil {
 		log.Printf("Error request execution: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -357,6 +358,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	color := r.FormValue("color")
 	size := r.FormValue("size")
+	description := r.FormValue("description")
 	params := make([]float64, len(paramNames))
 	for i, name := range paramNames {
 		var err error
@@ -376,14 +378,14 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	defer tx.Commit()
 
 	stmt, err := tx.Prepare(fmt.Sprintf(`select token, image_list, type, %v from items where 
-		shop_id == ? AND item_id == ? AND color == ? AND size == ?`, strings.Join(paramNames, ", ")))
+		shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ?`, strings.Join(paramNames, ", ")))
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
 	defer stmt.Close()
-	rows, err := stmt.Query(shop_id, id, color, size)
+	rows, err := stmt.Query(shop_id, id, color, size, description)
 	if err != nil {
 		log.Printf("Error query execution: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -448,6 +450,19 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if success {
+		stmt2, err := tx.Prepare(`update items set requests_count = requests_count + 1 where shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ? AND type == ?`)
+		if err != nil {
+			log.Printf("Error creating stmt: %v\n", err)
+			http.Error(w, "500 internal server error", 500)
+			return
+		}
+		defer stmt2.Close()
+		if _, err = stmt2.Exec(shop_id, id, color, size, description, bestType); err != nil {
+			log.Printf("Error request execution: %v\n", err)
+			http.Error(w, "500 internal server error", 500)
+			return
+		}
+
 		fmt.Fprintf(w, `{"error":"","result":"[%v]","type":"%v","params":%v}`, resultImageList, bestType, bestParams)
 	} else {
 		printError(w, "invalid_id")
@@ -549,9 +564,12 @@ func createTablesIfNotExists() {
 		item_id text not null, 
 		color text,
 		size text,
+		description text,
 		type integer not null,
 		%s,
-		image_list text
+		image_list text,
+		requests_count integer not null
+
 	);
 
 	create table if not exists tokens (

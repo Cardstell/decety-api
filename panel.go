@@ -198,7 +198,7 @@ func getImagesCount(token string) string {
 }
 
 func getItemsCount(token string) string {
-	stmt, err := db.Prepare("select count(*) from (select distinct item_id, color, size from items where token == ?)")
+	stmt, err := db.Prepare("select count(*) from (select distinct item_id, color, size, description from items where token == ?)")
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
 		return "null"
@@ -446,12 +446,15 @@ type jsonItem struct {
 	Item_id string 			`json:"item_id"`
 	Color string 			`json:"color"`
 	Size string 			`json:"size"`
+	Description string 		`json:"description"`
+	Requests_count int 		`json:"requests_count"`
 	Items []jsonTypeItem 	`json:"items"`
 }
 
 type jsonTypeItem struct {
 	type_ string
 	params []float64
+	requests_count int
 	image_list string
 }
 
@@ -459,6 +462,7 @@ type keyItem struct {
 	Item_id string
 	Color string
 	Size string
+	Description string
 }
 
 func (item jsonTypeItem) MarshalJSON() ([]byte, error) {
@@ -477,7 +481,7 @@ func (item jsonTypeItem) MarshalJSON() ([]byte, error) {
 		buffer.WriteString(fmt.Sprintf("\"%s\":%s,", name, string(jsonValue)))
 	}
 
-	buffer.WriteString("\"image_list\":[")
+	buffer.WriteString(fmt.Sprintf("\"requests_count\":%d,\"image_list\":[", item.requests_count))
 	ids := strings.Split(item.image_list, ",")
 	for i, id := range ids {
 		jsonValue, err := json.Marshal(id)
@@ -501,7 +505,7 @@ func itemsHandler(w http.ResponseWriter, r *http.Request) {
 
 	token := r.FormValue("token")
 
-	stmt, err := db.Prepare(fmt.Sprintf("select item_id, color, size, type, image_list, %v from items where token == ?", 
+	stmt, err := db.Prepare(fmt.Sprintf("select item_id, color, size, description, type, image_list, requests_count, %v from items where token == ?", 
 		strings.Join(paramNames, ", ")))
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
@@ -521,15 +525,18 @@ func itemsHandler(w http.ResponseWriter, r *http.Request) {
 	items := make(map[keyItem][]jsonTypeItem)
 
 	for rows.Next() {
-		var item_id, color, size, type_, image_list string
-		dest := make([]interface{}, 5 + len(paramNames))
+		var item_id, color, size, description, type_, image_list string
+		var requests_count int
+		dest := make([]interface{}, 7 + len(paramNames))
 		dest[0] = &item_id
 		dest[1] = &color
 		dest[2] = &size
-		dest[3] = &type_
-		dest[4] = &image_list
+		dest[3] = &description
+		dest[4] = &type_
+		dest[5] = &image_list
+		dest[6] = &requests_count
 		for i := range paramNames {
-			dest[i+5] = new(float64)
+			dest[i+7] = new(float64)
 		}
 
 		if err = rows.Scan(dest...); err != nil {
@@ -540,11 +547,11 @@ func itemsHandler(w http.ResponseWriter, r *http.Request) {
 
 		params := make([]float64, len(paramNames))
 		for i := range paramNames {
-			params[i] = *(dest[i+5].(*float64))		
+			params[i] = *(dest[i+7].(*float64))		
 		}
 
-		items[keyItem{item_id, color, size}] = append(items[keyItem{item_id, color, size}], 
-			jsonTypeItem{type_, params, image_list})
+		items[keyItem{item_id, color, size, description}] = append(items[keyItem{item_id, color, size, description}], 
+			jsonTypeItem{type_, params, requests_count, image_list})
 	}
 
 	if err = rows.Err(); err != nil {
@@ -555,8 +562,13 @@ func itemsHandler(w http.ResponseWriter, r *http.Request) {
 
 	result := []jsonItem{}
 	for key, typeItems := range items {
-		result = append(result, jsonItem{key.Item_id, key.Color, key.Size, typeItems})
+		requests_count := 0
+		for _, item := range typeItems {
+			requests_count += item.requests_count
+		}
+		result = append(result, jsonItem{key.Item_id, key.Color, key.Size, key.Description, requests_count, typeItems})
 	}
+
 	json_result, err := json.Marshal(result)
 	if err != nil {
 		log.Printf("Error json serializing: %v\n", err)

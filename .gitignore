@@ -4,5 +4,6 @@
 main
 images
 backups
+*.sh
 *.xlsx
 *.txt
