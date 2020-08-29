@@ -463,7 +463,9 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Fprintf(w, `{"error":"","result":"[%v]","type":"%v","params":%v}`, resultImageList, bestType, bestParams)
+
+		fmt.Fprintf(w, `{"error":"","result":["%v"],"type":"%v","params":%v}`, 
+			strings.ReplaceAll(resultImageList, ",", `","`), bestType, bestParams)
 	} else {
 		printError(w, "invalid_id")
 	}
