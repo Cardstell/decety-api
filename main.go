@@ -109,20 +109,30 @@ func isImageIDExists(image_id string) bool {
 	return rows.Next()
 }
 
-func generatePreview(file multipart.File, image_id string) error {
+func generateSmallImageAndPreview(file multipart.File, image_id string) error {
 	fullImage, _, err := image.Decode(file)
 	if err != nil {
 		return err
 	}
 
+	smallImage := imaging.Resize(fullImage, 0, 200, imaging.Lanczos)
 	previewImage := imaging.Thumbnail(fullImage, 80, 80, imaging.CatmullRom)
-	newImage, err := os.Create("images/previews/" + image_id + ".jpg")
+
+	smallImageFile, err := os.Create("images/small/" + image_id + ".jpg")
 	if err != nil {
 		return err
 	}
-	defer newImage.Close()
+	defer smallImageFile.Close()
+	previewFile, err := os.Create("images/previews/" + image_id + ".jpg")
+	if err != nil {
+		return err
+	}
+	defer previewFile.Close()
 
-	if jpeg.Encode(newImage, previewImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
+	if jpeg.Encode(smallImageFile, smallImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
+		return err
+	}
+	if jpeg.Encode(previewFile, previewImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
 		return err
 	}
 	return nil
@@ -172,7 +182,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	if err = generatePreview(reqfile, image_id); err != nil {
+	if err = generateSmallImageAndPreview(reqfile, image_id); err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
 		return
@@ -551,6 +561,32 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, file)
 }
 
+func imageSmallHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	valid, err := isValidImageID(id)
+	if err != nil {
+		log.Print("Database error:", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	if !valid {
+		http.Error(w, "404 file not found", 404)
+		return
+	}
+	file, err := os.Open("./images/small/" + id + ".jpg")
+	if err != nil {
+		http.Error(w, "404 file not found", 404)
+		return
+	}
+	defer file.Close()
+
+	fileStat, _ := file.Stat()
+	fileSize := strconv.FormatInt(fileStat.Size(), 10)
+	w.Header().Set("Content-Type", "image/jpg")
+	w.Header().Set("Content-Length", fileSize)
+	io.Copy(w, file)
+}
+
 func createTablesIfNotExists() {
 	sqlStmt := fmt.Sprintf(`
 	create table if not exists images (
@@ -596,6 +632,7 @@ func createTablesIfNotExists() {
 func main() {
 	rand.Seed(time.Now().UTC().UnixNano())
 	os.MkdirAll(filepath.Join(".", "images/previews"), os.ModePerm)
+	os.MkdirAll(filepath.Join(".", "images/small"), os.ModePerm)
 
 	var err error
 	db, err = sql.Open("sqlite3", "sqlite3.db")
@@ -638,6 +675,7 @@ func main() {
 	r.HandleFunc(prefix + "/update", updateHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/get", getHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/image/{id}", imageHandler).Methods("GET")
+	r.HandleFunc(prefix + "/image-small/{id}", imageSmallHandler).Methods("GET")
 	r.HandleFunc(prefix + "/dc-admin-p/", loginHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/tokens", tokensHandler).Methods("GET", "POST")
 	r.HandleFunc(prefix + "/dc-admin-p/items", itemsHandler).Methods("GET", "POST")
