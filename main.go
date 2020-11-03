@@ -10,11 +10,9 @@ import (
 	"database/sql"
 	"math/rand"
 	"time"
-	"github.com/disintegration/imaging"
-	"image"
-	"image/jpeg"
 	"path/filepath"
 	"os"
+	"os/exec"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -109,29 +107,17 @@ func isImageIDExists(db *sql.DB, image_id string) bool {
 }
 
 func generateSmallImageAndPreview(file multipart.File, image_id string) error {
-	fullImage, _, err := image.Decode(file)
-	if err != nil {
+	cmd := exec.Command("epeg", "-w", "80", "-h", "80", "-q", 
+		"50", "images/" + image_id + ".jpg", "images/previews/" + image_id + ".jpg")
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH=/usr/local/lib")
+	if err := cmd.Run(); err != nil {
 		return err
 	}
 
-	smallImage := imaging.Resize(fullImage, 0, 200, imaging.Lanczos)
-	previewImage := imaging.Thumbnail(fullImage, 80, 80, imaging.CatmullRom)
-
-	smallImageFile, err := os.Create("images/small/" + image_id + ".jpg")
-	if err != nil {
-		return err
-	}
-	defer smallImageFile.Close()
-	previewFile, err := os.Create("images/previews/" + image_id + ".jpg")
-	if err != nil {
-		return err
-	}
-	defer previewFile.Close()
-
-	if jpeg.Encode(smallImageFile, smallImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
-		return err
-	}
-	if jpeg.Encode(previewFile, previewImage, &jpeg.Options{jpeg.DefaultQuality}) != nil {
+	cmd = exec.Command("epeg", "-h", "200", "-p", 
+		"images/" + image_id + ".jpg", "images/small/" + image_id + ".jpg")
+	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH=/usr/local/lib")
+	if err := cmd.Run(); err != nil {
 		return err
 	}
 	return nil
