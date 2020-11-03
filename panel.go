@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"math/rand"
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"github.com/satori/go.uuid"
 	"github.com/gorilla/mux"
@@ -21,7 +22,7 @@ var (
 	static = map[string]string{}
 )
 
-func addUUID(id string) error {
+func addUUID(db *sql.DB, id string) error {
 	stmt, err := db.Prepare("insert into admin_uuids (uuid) values (?)")
 	if err != nil {
 		return fmt.Errorf("Error creating stmt: %v\n", err)
@@ -34,7 +35,7 @@ func addUUID(id string) error {
 	return nil
 }
 
-func checkUUID(id string) (bool, error) {
+func checkUUID(db *sql.DB, id string) (bool, error) {
 	stmt, err := db.Prepare("select * from admin_uuids where uuid == ?")
 	if err != nil {
 		return false, fmt.Errorf("Error creating stmt: %v\n", err)
@@ -47,11 +48,11 @@ func checkUUID(id string) (bool, error) {
 	return rows.Next(), nil
 }
 
-func redirectAuthorized(w http.ResponseWriter, r *http.Request) bool {
+func redirectAuthorized(db *sql.DB, w http.ResponseWriter, r *http.Request) bool {
 	cookie, err := r.Cookie("uuid")
 	result := false
 	if err == nil {
-		result, err = checkUUID(cookie.Value)
+		result, err = checkUUID(db, cookie.Value)
 		if err != nil {
 			log.Print(err)
 			http.Error(w, "500 internal server error", 500)
@@ -67,11 +68,11 @@ func redirectAuthorized(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-func redirectUnauthorized(w http.ResponseWriter, r *http.Request) bool {
+func redirectUnauthorized(db *sql.DB, w http.ResponseWriter, r *http.Request) bool {
 	cookie, err := r.Cookie("uuid")
 	result := false
 	if err == nil {
-		result, err = checkUUID(cookie.Value)
+		result, err = checkUUID(db, cookie.Value)
 		if err != nil {
 			log.Print(err)
 			http.Error(w, "500 internal server error", 500)
@@ -88,6 +89,14 @@ func redirectUnauthorized(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
 	if (r.Method == http.MethodPost) {
 		// login
 		login := r.FormValue("login")
@@ -100,7 +109,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 		_id, _ := uuid.NewV4()
 		id := _id.String()
-		addUUID(id)
+		addUUID(db, id)
 
 		http.SetCookie(w, &http.Cookie{
 			Name: "uuid", 
@@ -110,7 +119,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Fprint(w, "ok")
 	} else {
-		if redirectAuthorized(w, r) {
+		if redirectAuthorized(db, w, r) {
 			return
 		}
 
@@ -134,7 +143,7 @@ func getRandomShopID() string {
 	return strconv.Itoa(rand.Intn(10000))
 }
 
-func isTokenExists(token string) bool {
+func isTokenExists(db *sql.DB, token string) bool {
 	stmt, err := db.Prepare("select * from tokens where token == ?")
 	if err != nil {
 		log.Fatalf("Error creating stmt: %v\n", err)
@@ -147,7 +156,7 @@ func isTokenExists(token string) bool {
 	return rows.Next()
 }
 
-func isShopIDExists(shop_id string) bool {
+func isShopIDExists(db *sql.DB, shop_id string) bool {
 	stmt, err := db.Prepare("select * from tokens where shop_id == ?")
 	if err != nil {
 		log.Fatalf("Error creating stmt: %v\n", err)
@@ -160,25 +169,25 @@ func isShopIDExists(shop_id string) bool {
 	return rows.Next()
 }
 
-func getRandomValidToken() string {
+func getRandomValidToken(db *sql.DB) string {
 	for {
 		token := getRandomToken()
-		if !isTokenExists(token) {
+		if !isTokenExists(db, token) {
 			return token
 		}
 	}
 }
 
-func getRandomValidShopID() string {
+func getRandomValidShopID(db *sql.DB) string {
 	for {
 		shop_id := getRandomShopID()
-		if !isShopIDExists(shop_id) {
+		if !isShopIDExists(db, shop_id) {
 			return shop_id
 		}
 	}
 }
 
-func getImagesCount(token string) string {
+func getImagesCount(db *sql.DB, token string) string {
 	stmt, err := db.Prepare("select count(token) from images where token == ?")
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
@@ -197,7 +206,7 @@ func getImagesCount(token string) string {
 	return result
 }
 
-func getItemsCount(token string) string {
+func getItemsCount(db *sql.DB, token string) string {
 	stmt, err := db.Prepare("select count(*) from (select distinct item_id, color, size, description from items where token == ?)")
 	if err != nil {
 		log.Printf("Error creating stmt: %v\n", err)
@@ -217,7 +226,15 @@ func getItemsCount(token string) string {
 }
 
 func tokensHandler(w http.ResponseWriter, r *http.Request) {
-	if redirectUnauthorized(w, r) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	if redirectUnauthorized(db, w, r) {
 		return
 	}
 
@@ -230,7 +247,7 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 			description := r.FormValue("description")
 			exp_time := r.FormValue("exp_time")
 
-			if token == "" || shop_id == "" || isTokenExists(token) || isShopIDExists(shop_id) {
+			if token == "" || shop_id == "" || isTokenExists(db, token) || isShopIDExists(db, shop_id) {
 				fmt.Fprint(w, "invalid_request")
 				return	
 			}
@@ -265,13 +282,13 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 			description := r.FormValue("description")
 			exp_time := r.FormValue("exp_time")
 
-			if token == "" || shop_id == "" || !isTokenExists(token) {
+			if token == "" || shop_id == "" || !isTokenExists(db, token) {
 				fmt.Fprint(w, "invalid_request")
 				return	
 			}
 
-			if isShopIDExists(shop_id) {
-				token_shop_id, err := getShopID(token)
+			if isShopIDExists(db, shop_id) {
+				token_shop_id, err := getShopID(db, token)
 				if err != nil || token_shop_id != shop_id {
 					fmt.Fprint(w, "invalid_request")
 					return
@@ -377,8 +394,8 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 	// Create html token list 
 
 	html := templates["tokens"]
-	html = strings.ReplaceAll(html, "{{token}}", getRandomValidToken())
-	html = strings.ReplaceAll(html, "{{shop_id}}", getRandomValidShopID())
+	html = strings.ReplaceAll(html, "{{token}}", getRandomValidToken(db))
+	html = strings.ReplaceAll(html, "{{shop_id}}", getRandomValidShopID(db))
 
 	token_blocks := ""
 
@@ -412,8 +429,8 @@ func tokensHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		token_block = strings.ReplaceAll(token_block, "{{description}}", description)
 		
-		token_block = strings.ReplaceAll(token_block, "{{images_count}}", getImagesCount(token))
-		token_block = strings.ReplaceAll(token_block, "{{items_count}}", getItemsCount(token))
+		token_block = strings.ReplaceAll(token_block, "{{images_count}}", getImagesCount(db, token))
+		token_block = strings.ReplaceAll(token_block, "{{items_count}}", getItemsCount(db, token))
 
 		expired := expTime <= time.Now().Unix()
 		time_string := time.Unix(expTime, 0).UTC().Format("2006-01-02 15:04:05 UTC")
@@ -499,7 +516,15 @@ func (item jsonTypeItem) MarshalJSON() ([]byte, error) {
 }
 
 func itemsHandler(w http.ResponseWriter, r *http.Request) {
-	if redirectUnauthorized(w, r) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	if redirectUnauthorized(db, w, r) {
 		return
 	}
 
@@ -584,10 +609,18 @@ func isLoginStatic(name string) bool {
 }
 
 func staticHandler(w http.ResponseWriter, r *http.Request) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
 	name := mux.Vars(r)["name"]
 
 	if !isLoginStatic(name) {
-		if redirectUnauthorized(w, r) {
+		if redirectUnauthorized(db, w, r) {
 			return
 		}
 	}
@@ -610,7 +643,15 @@ func staticHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func imagePanelHandler(w http.ResponseWriter, r *http.Request) {
-	if redirectUnauthorized(w, r) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	if redirectUnauthorized(db, w, r) {
 		return
 	}
 
@@ -630,7 +671,15 @@ func imagePanelHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func previewHandler(w http.ResponseWriter, r *http.Request) {
-	if redirectUnauthorized(w, r) {
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	if redirectUnauthorized(db, w, r) {
 		return
 	}
 

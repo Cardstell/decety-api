@@ -26,7 +26,6 @@ var (
 	templateNames = []string{"login", "tokens", "token-block"}
 	staticNames = []string{"login.css", "login.js", "tokens.css", "tokens.js"}
 	limiter = rate.NewLimiter(1, 1000)
-	db *sql.DB
 	server *http.Server
 )
 
@@ -58,7 +57,7 @@ func getRequestFile(r *http.Request) (multipart.File, bool) {
 	return multipart.File(nil), false
 }
 
-func isValidToken(token string) (bool, error) {
+func isValidToken(db *sql.DB, token string) (bool, error) {
 	stmt, err := db.Prepare("select exp_time from tokens where token == ?")
 	if err != nil {
 		return false, fmt.Errorf("Error creating stmt: %v\n", err)
@@ -83,7 +82,7 @@ func isValidToken(token string) (bool, error) {
 	return exp_time > time.Now().Unix(), nil
 }
 
-func addImageIDtoDB(token, image_id string) error {
+func addImageIDtoDB(db *sql.DB, token, image_id string) error {
 	stmt, err := db.Prepare("insert into images (token, image_id) values (?, ?)")
 	if err != nil {
 		return fmt.Errorf("Error creating stmt: %v\n", err)
@@ -96,7 +95,7 @@ func addImageIDtoDB(token, image_id string) error {
 	return nil
 }
 
-func isImageIDExists(image_id string) bool {
+func isImageIDExists(db *sql.DB, image_id string) bool {
 	stmt, err := db.Prepare("select * from images where image_id == ?")
 	if err != nil {
 		log.Fatalf("Error creating stmt: %v\n", err)
@@ -146,7 +145,16 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	r.ParseMultipartForm(1 << 23)
 	token := r.FormValue("token")
-	valid, err := isValidToken(token)
+
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	valid, err := isValidToken(db, token)
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
@@ -165,7 +173,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	defer reqfile.Close()
 
 	image_id := getRandomID()
-	for ;isImageIDExists(image_id); {
+	for ;isImageIDExists(db, image_id); {
 		image_id = getRandomID()
 	}
 	file, err := os.Create("images/" + image_id + ".jpg")
@@ -188,7 +196,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = addImageIDtoDB(token, image_id)
+	err = addImageIDtoDB(db, token, image_id)
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
@@ -198,7 +206,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	printResult(w, "\"" + image_id + "\"")
 }
 
-func isValidImageIDs(image_ids string) (bool, error) {
+func isValidImageIDs(db *sql.DB, image_ids string) (bool, error) {
 	ids := strings.Split(image_ids, ",")
 	if len(ids) > maxImagesPerID || image_ids == "" {
 		return false, nil
@@ -238,7 +246,7 @@ func imageIDsToJSON(image_ids string) string {
 	return "[" + result[:len(result)-1] + "]"
 }
 
-func getShopID(token string) (string, error) {
+func getShopID(db *sql.DB, token string) (string, error) {
 	stmt, err := db.Prepare("select shop_id from tokens where token == ?")
 	if err != nil {
 		return "", fmt.Errorf("Error creating stmt: %v\n", err)
@@ -262,7 +270,7 @@ func getShopID(token string) (string, error) {
 	return shop_id, nil
 }
 
-func isItemExists(id, color, size, description, type_ string) bool {
+func isItemExists(db *sql.DB, id, color, size, description, type_ string) bool {
 	stmt, err := db.Prepare("select * from items where item_id == ? AND color == ? AND size == ? AND description == ? AND type == ?")
 	if err != nil {
 		log.Fatalf("Error creating stmt: %v\n", err)
@@ -307,7 +315,16 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		printError(w, "flood_limit")
 		return
 	}
-	valid, err := isValidToken(token)
+
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	valid, err := isValidToken(db, token)
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
@@ -318,14 +335,14 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shop_id, err := getShopID(token)
+	shop_id, err := getShopID(db, token)
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
 
-	valid, err = isValidImageIDs(image_ids)
+	valid, err = isValidImageIDs(db, image_ids)
 	if err != nil {
 		log.Print(err)
 		http.Error(w, "500 internal server error", 500)
@@ -336,7 +353,7 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if isItemExists(id, color, size, description, type_) || id == "" {
+	if isItemExists(db, id, color, size, description, type_) || id == "" {
 		printError(w, "invalid_id")
 		return
 	}
@@ -378,6 +395,14 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -428,7 +453,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			currentParams[i] = *(dest[i+3].(*float64))		
 		}
 
-		valid, err := isValidToken(token)
+		valid, err := isValidToken(db, token)
 		if err != nil {
 			log.Print(err)
 			http.Error(w, "500 internal server error", 500)
@@ -481,7 +506,7 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func isValidImageID(id string) (bool, error) {
+func isValidImageID(db *sql.DB, id string) (bool, error) {
 	tx, err := db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("Error creating database transaction: %v\n", err)
@@ -537,7 +562,16 @@ func isValidImageID(id string) (bool, error) {
 
 func imageHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	valid, err := isValidImageID(id)
+
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	valid, err := isValidImageID(db, id)
 	if err != nil {
 		log.Print("Database error:", err)
 		http.Error(w, "500 internal server error", 500)
@@ -563,7 +597,16 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 func imageSmallHandler(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
-	valid, err := isValidImageID(id)
+
+	db, err := sql.Open("sqlite3", "sqlite3.db")
+	if err != nil {
+		log.Printf("Error opening database: %v\n", err)
+		http.Error(w, "500 internal server error", 500)
+		return
+	}
+	defer db.Close()
+
+	valid, err := isValidImageID(db, id)
 	if err != nil {
 		log.Print("Database error:", err)
 		http.Error(w, "500 internal server error", 500)
@@ -587,7 +630,7 @@ func imageSmallHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, file)
 }
 
-func createTablesIfNotExists() {
+func createTablesIfNotExists(db *sql.DB) {
 	sqlStmt := fmt.Sprintf(`
 	create table if not exists images (
 		id integer not null primary key autoincrement, 
@@ -634,13 +677,13 @@ func main() {
 	os.MkdirAll(filepath.Join(".", "images/previews"), os.ModePerm)
 	os.MkdirAll(filepath.Join(".", "images/small"), os.ModePerm)
 
-	var err error
-	db, err = sql.Open("sqlite3", "sqlite3.db")
+	db, err := sql.Open("sqlite3", "sqlite3.db")
 	if err != nil {
 		log.Fatal("Error opening database:", err)
 	}
 	defer db.Close()
-	createTablesIfNotExists()
+
+	createTablesIfNotExists(db)
 
 	for _, name := range templateNames {
 		file, err := os.Open("templates/" + name + ".html")

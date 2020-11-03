@@ -200,7 +200,7 @@ func TestAll(t *testing.T) {
 	// t.Run("Benchmark uploading photos", benchUploading)
 	// t.Run("Benchmark updating data", benchUpdating)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 1000 * time.Millisecond)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		t.Fatalf("Failed stopping server: %v", err)
