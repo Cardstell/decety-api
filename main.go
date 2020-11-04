@@ -405,8 +405,8 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	defer stmt.Close()
 	rows, err := stmt.Query(shop_id, id, color, size, description)
+	stmt.Close()
 	if err != nil {
 		log.Printf("Error query execution: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
@@ -477,13 +477,13 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "500 internal server error", 500)
 			return
 		}
-		defer stmt2.Close()
-		if _, err = stmt2.Exec(shop_id, id, color, size, description, bestType); err != nil {
+		_, err = stmt2.Exec(shop_id, id, color, size, description, bestType)
+		stmt2.Close()
+		if err != nil {
 			log.Printf("Error request execution: %v\n", err)
 			http.Error(w, "500 internal server error", 500)
 			return
 		}
-
 
 		fmt.Fprintf(w, `{"error":"","result":["%v"],"type":"%v","params":%v}`, 
 			strings.ReplaceAll(resultImageList, ",", `","`), bestType, bestParams)
