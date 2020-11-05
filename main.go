@@ -366,6 +366,73 @@ func updateHandler(w http.ResponseWriter, r *http.Request) {
 	printResult(w, "\"\"")
 }
 
+func getBestType(db *sql.DB, tx *sql.Tx, shop_id, id, color, size, description string, params []float64) (err error, success bool, bestType, bestParams, resultImageList string) {
+	stmt, err := tx.Prepare(fmt.Sprintf(`select token, image_list, type, %v from items where 
+		shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ?`, strings.Join(paramNames, ", ")))
+	if err != nil {
+		log.Printf("Error creating stmt: %v\n", err)
+		return
+	}
+	defer stmt.Close()
+
+	rows, err := stmt.Query(shop_id, id, color, size, description)
+	if err != nil {
+		log.Printf("Error query execution: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	success = false
+	var minL2Norm float64
+
+	for rows.Next() {
+		var token, image_list, type_ string
+		dest := make([]interface{}, 3 + len(paramNames))
+		dest[0] = &token
+		dest[1] = &image_list
+		dest[2] = &type_
+		for i := range paramNames {
+			dest[i+3] = new(float64)
+		}
+
+		if err = rows.Scan(dest...); err != nil {
+			log.Print(err)
+			return
+		}
+
+		currentParams := make([]float64, len(paramNames))
+		for i := range paramNames {
+			currentParams[i] = *(dest[i+3].(*float64))
+		}
+
+		//var valid bool
+		//valid, err = isValidToken(db, token)
+		//if err != nil {
+		//	log.Print(err)
+		//	return
+		//}
+		//if !valid {
+		//	continue
+		//}
+
+		l2norm := getL2Norm(params, currentParams)
+		if !success || l2norm < minL2Norm {
+			success = true
+			bestType = type_
+			bestParams = strings.ReplaceAll(fmt.Sprint(currentParams), " ", ",")
+			resultImageList = image_list
+			minL2Norm = l2norm
+		}
+
+	}
+	if rows.Err() != nil {
+		err = rows.Err()
+		log.Print(err)
+		return
+	}
+	return
+}
+
 func getHandler(w http.ResponseWriter, r *http.Request) {
 	shop_id := r.FormValue("shop_id")
 	id := r.FormValue("id")
@@ -396,82 +463,17 @@ func getHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	defer tx.Commit()
+	//defer tx.Commit()
 
-	stmt, err := tx.Prepare(fmt.Sprintf(`select token, image_list, type, %v from items where 
-		shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ?`, strings.Join(paramNames, ", ")))
+	err, success, bestType, bestParams, resultImageList := getBestType(db, tx, shop_id, id, color, size, description, params)
 	if err != nil {
-		log.Printf("Error creating stmt: %v\n", err)
 		http.Error(w, "500 internal server error", 500)
 		return
 	}
-	rows, err := stmt.Query(shop_id, id, color, size, description)
-	stmt.Close()
-	if err != nil {
-		log.Printf("Error query execution: %v\n", err)
-		http.Error(w, "500 internal server error", 500)
-		return
-	}
-	defer rows.Close()
-
-	success := false
-	var bestType, bestParams, resultImageList string
-	var minL2Norm float64
-
-	for rows.Next() {
-		var token, image_list, type_ string
-		dest := make([]interface{}, 3 + len(paramNames))
-		dest[0] = &token
-		dest[1] = &image_list
-		dest[2] = &type_
-		for i := range paramNames {
-			dest[i+3] = new(float64)
-		}
-
-		if err = rows.Scan(dest...); err != nil {
-			log.Print(err)
-			http.Error(w, "500 internal server error", 500)
-			return
-		}
-
-		currentParams := make([]float64, len(paramNames))
-		for i := range paramNames {
-			currentParams[i] = *(dest[i+3].(*float64))		
-		}
-
-		valid, err := isValidToken(db, token)
-		if err != nil {
-			log.Print(err)
-			http.Error(w, "500 internal server error", 500)
-			return
-		}
-		if !valid {
-			continue
-		}
-
-		l2norm := getL2Norm(params, currentParams)
-		if !success {
-			success = true
-			bestType = type_
-			bestParams = strings.ReplaceAll(fmt.Sprint(currentParams), " ", ",")
-			resultImageList = image_list
-			minL2Norm = l2norm
-		} else if l2norm < minL2Norm {
-			bestType = type_
-			bestParams = strings.ReplaceAll(fmt.Sprint(currentParams), " ", ",")
-			resultImageList = image_list
-			minL2Norm = l2norm
-		}
-
-	}
-	if rows.Err() != nil {
-		log.Print(err)
-		http.Error(w, "500 internal server error", 500)
-		return
-	}
+	tx.Commit()
 
 	if success {
-		stmt2, err := tx.Prepare(`update items set requests_count = requests_count + 1 where shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ? AND type == ?`)
+		stmt2, err := db.Prepare(`update items set requests_count = requests_count + 1 where shop_id == ? AND item_id == ? AND color == ? AND size == ? AND description == ? AND type == ?`)
 		if err != nil {
 			log.Printf("Error creating stmt: %v\n", err)
 			http.Error(w, "500 internal server error", 500)
