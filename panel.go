@@ -107,7 +107,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_id, _ := uuid.NewV4()
+		_id := uuid.NewV4()
 		id := _id.String()
 		addUUID(db, id)
 
