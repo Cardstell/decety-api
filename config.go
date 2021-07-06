@@ -4,7 +4,7 @@ var (
 	port = "32851"
 	prefix = "/decety"
 	defaultLogin = "admin"
-	defaultPassword = "rqMhPnODHeam"
+	defaultPassword = "password"
 
 	maxImagesPerID = 100
 	paramNames = []string{"d1", "d2", "d3", "d4", "d5"}
